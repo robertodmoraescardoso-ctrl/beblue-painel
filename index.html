@@ -154,6 +154,7 @@
   .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;}
   .badge-esgotado{background:#FBEEEB;color:var(--danger);}
   .badge-ok{background:#E6F3EF;color:var(--sea-dark);}
+  .badge-atencao{background:#FFF6E6;color:#8A5B00;}
   .badge-status{background:var(--bg);color:var(--ink-soft);border:1px solid var(--line);}
 
   .grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;}
@@ -161,6 +162,11 @@
   .stat .rotulo{font-size:13px;color:var(--ink-soft);}
 
   .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px;}
+  .faixa-datas{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    margin:-8px 0 18px;padding:12px 14px;background:var(--bg);
+    border:1px solid var(--line);border-radius:var(--radius-s);}
+  .faixa-datas label{margin:0;text-transform:none;letter-spacing:0;font-size:13px;}
+  .faixa-datas input{max-width:170px;}
   .chip{padding:7px 14px;border-radius:999px;border:1.5px solid var(--line);
     background:var(--card);font-size:13px;font-weight:600;color:var(--ink-soft);}
   .chip.active{background:var(--ink);color:#fff;border-color:var(--ink);}
@@ -314,6 +320,7 @@
       <div class="msg msg-alerta oculto" id="alerta-estoque"></div>
       <div class="toolbar">
         <button class="btn btn-primary btn-sm" id="btn-novo">+ Inserir produto</button>
+        <button class="btn btn-outline btn-sm" id="btn-rel-estoque">Relatório de estoque</button>
       </div>
       <div class="card tabela-scroll" style="padding:0;overflow-x:auto;">
         <table>
@@ -369,6 +376,13 @@
       <div class="msg msg-erro oculto" id="erro-faturamento"></div>
       <div class="msg msg-alerta oculto" id="alerta-faturamento"></div>
       <div class="chips" id="chips-periodo"></div>
+      <div id="faixa-datas" class="faixa-datas oculto">
+        <label>De</label>
+        <input type="date" id="data-inicio">
+        <label>até</label>
+        <input type="date" id="data-fim">
+        <button class="btn btn-primary btn-sm" id="btn-aplicar-datas">Aplicar</button>
+      </div>
 
       <div class="grid-cards" style="margin-bottom:14px;">
         <div class="card stat"><div class="rotulo">Vendas confirmadas</div>
@@ -416,6 +430,22 @@
           <p class="muted" style="margin-bottom:12px;">Use isto para montar a grade da próxima compra.</p>
           <div id="mais-tamanhos"></div>
         </div>
+      </div>
+
+      <div class="card" style="margin-top:22px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <h3 style="font-size:15px;margin-bottom:4px;">Planejamento da próxima compra</h3>
+            <p class="muted" id="explica-planejamento" style="margin-bottom:12px;"></p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <label style="text-transform:none;letter-spacing:0;font-size:13px;margin:0;">Quero estoque para</label>
+            <input type="number" id="dias-cobertura" value="30" min="7" max="180"
+              class="input-sm" style="width:70px;">
+            <span class="muted">dias</span>
+          </div>
+        </div>
+        <div id="tabela-planejamento" class="tabela-scroll" style="overflow-x:auto;"></div>
       </div>
     </section>
   </main>
@@ -555,7 +585,8 @@ const PERIODOS = [
   { id:'1', rotulo:'Hoje', dias:1 },
   { id:'7', rotulo:'7 dias', dias:7 },
   { id:'30', rotulo:'30 dias', dias:30 },
-  { id:'tudo', rotulo:'Tudo', dias:null }
+  { id:'tudo', rotulo:'Tudo', dias:null },
+  { id:'faixa', rotulo:'Escolher datas', dias:null }
 ];
 
 function formatBRL(v){
@@ -1410,6 +1441,93 @@ function pedidosFiltrados(){
    Reflete exatamente os pedidos que estão filtrados na tela (mesmo status e
    busca aplicados) — o relatório mostra sempre o que você está vendo na hora.
 =========================================================================== */
+/* ===========================================================================
+   RELATÓRIO DE ESTOQUE
+   Mostra o que você tem hoje, quanto isso custou e quanto vale se vender tudo.
+   É o retrato do dinheiro parado em mercadoria.
+=========================================================================== */
+function abrirRelatorioEstoque(){
+  const box = document.getElementById('conteudo-relatorio');
+  const ativos = produtos.filter(p => p.ativo);
+
+  let totalPares = 0, totalCusto = 0, totalVenda = 0;
+  const linhas = [];
+
+  ativos.forEach(prod => {
+    const tamanhos = Array.isArray(prod.tamanhos) ? prod.tamanhos : [];
+    const pares = tamanhos.reduce((sm,t) => sm + Number((prod.estoque||{})[String(t)] ?? 0), 0);
+    const custoUn = custoTotal(prod);
+    const preco = Number(prod.preco) || 0;
+
+    totalPares += pares;
+    totalCusto += custoUn * pares;
+    totalVenda += preco * pares;
+
+    linhas.push({
+      cod: prod.cod || '', nome: prod.nome, pares, custoUn, preco,
+      detalhe: tamanhos.map(t => `${t}: ${Number((prod.estoque||{})[String(t)] ?? 0)}`).join(' · '),
+      zerados: tamanhos.filter(t => Number((prod.estoque||{})[String(t)] ?? 0) === 0)
+    });
+  });
+
+  linhas.sort((a,b) => b.pares - a.pares);
+  const lucroPotencial = totalVenda - totalCusto;
+
+  box.innerHTML = `
+    <div class="rel-cabecalho">
+      <h2>Relatório de estoque — Beblue</h2>
+      <p class="muted">${ativos.length} modelo(s) ativo(s) &middot; Emitido em ${formatData(new Date().toISOString())}</p>
+    </div>
+
+    <div class="rel-resumo-totais">
+      <div>Pares em estoque<br><b>${totalPares}</b></div>
+      <div>Investido (custo)<br><b>${formatBRL(totalCusto)}</b></div>
+      <div>Se vender tudo<br><b>${formatBRL(totalVenda)}</b></div>
+      <div>Lucro potencial<br><b>${formatBRL(lucroPotencial)}</b></div>
+    </div>
+
+    <div class="rel-secao">
+      <h3>Estoque por modelo</h3>
+      ${ linhas.length === 0 ? '<p class="muted">Nenhum produto ativo.</p>' : `
+      <table class="rel-tabela">
+        <thead><tr>
+          <th>Cód.</th><th>Modelo</th><th>Por numeração</th><th>Pares</th>
+          <th>Custo un.</th><th>Preço</th><th>Investido</th>
+        </tr></thead>
+        <tbody>${linhas.map(l => `
+          <tr>
+            <td>${esc(l.cod)}</td>
+            <td>${esc(l.nome)}</td>
+            <td class="muted">${esc(l.detalhe)}</td>
+            <td><b>${l.pares}</b></td>
+            <td>${l.custoUn > 0 ? formatBRL(l.custoUn) : '—'}</td>
+            <td>${formatBRL(l.preco)}</td>
+            <td>${l.custoUn > 0 ? formatBRL(l.custoUn * l.pares) : '—'}</td>
+          </tr>`).join('')}</tbody>
+      </table>` }
+    </div>
+
+    ${ (() => {
+      const faltando = linhas.filter(l => l.zerados.length);
+      if (!faltando.length) return '';
+      return `<div class="rel-secao">
+        <h3>Numerações esgotadas</h3>
+        <table class="rel-tabela">
+          <thead><tr><th>Modelo</th><th>Numerações sem estoque</th></tr></thead>
+          <tbody>${faltando.map(l =>
+            `<tr><td>${esc(l.nome)}</td><td>${esc(l.zerados.join(', '))}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    })() }
+
+    ${ totalCusto === 0 ? `<p class="muted" style="margin-top:14px;">
+      Os valores de custo aparecem em branco porque os produtos ainda não têm
+      custo cadastrado. Preencha em Editar para ver quanto está investido.</p>` : '' }
+  `;
+
+  abrirModal('modal-relatorio');
+}
+
 function abrirRelatorio(){
   const lista = pedidosFiltrados();
   const box = document.getElementById('conteudo-relatorio');
@@ -1655,22 +1773,62 @@ function renderChipsPeriodo(){
   box.querySelectorAll('[data-periodo]').forEach(b => {
     b.addEventListener('click', () => {
       periodo = b.dataset.periodo;
+      const faixaBox = document.getElementById('faixa-datas');
+      faixaBox.classList.toggle('oculto', periodo !== 'faixa');
+
+      if (periodo === 'faixa'){
+        // Sugere o último mês como ponto de partida
+        if (!dataFim){
+          const hoje = new Date();
+          const antes = new Date(); antes.setDate(antes.getDate() - 29);
+          dataFim = hoje.toISOString().slice(0,10);
+          dataInicio = antes.toISOString().slice(0,10);
+          document.getElementById('data-inicio').value = dataInicio;
+          document.getElementById('data-fim').value = dataFim;
+        }
+      }
       renderChipsPeriodo();
       renderFaturamento();
     });
   });
 }
 
-function renderFaturamento(){
-  const cfg = PERIODOS.find(p => p.id === periodo);
+/* Guarda as datas quando o período é "Escolher datas". */
+let dataInicio = null, dataFim = null;
 
-  // Recorta o período
+/* Devolve início e fim do período escolhido, e quantos dias ele tem.
+   O número de dias é o que permite calcular média por dia e, com ela,
+   estimar por quanto tempo o estoque ainda dura. */
+function limitesDoPeriodo(){
+  const cfg = PERIODOS.find(p => p.id === periodo);
+  const fim = new Date(); fim.setHours(23,59,59,999);
+
+  if (periodo === 'faixa' && dataInicio && dataFim){
+    const i = new Date(dataInicio + 'T00:00:00');
+    const f = new Date(dataFim + 'T23:59:59');
+    const dias = Math.max(1, Math.floor((f - i) / 86400000) + 1);
+    return { inicio:i, fim:f, dias, rotulo:`${i.toLocaleDateString('pt-BR')} a ${f.toLocaleDateString('pt-BR')}` };
+  }
+
+  if (!cfg.dias){
+    // "Tudo": conta desde o pedido mais antigo
+    const datas = pedidos.map(p => new Date(p.criado_em)).filter(d => !isNaN(d));
+    const i = datas.length ? new Date(Math.min(...datas)) : new Date();
+    i.setHours(0,0,0,0);
+    const dias = Math.max(1, Math.floor((fim - i) / 86400000) + 1);
+    return { inicio:i, fim, dias, rotulo:'todo o período' };
+  }
+
+  const i = new Date(); i.setDate(i.getDate() - cfg.dias + 1); i.setHours(0,0,0,0);
+  return { inicio:i, fim, dias:cfg.dias, rotulo:cfg.rotulo.toLowerCase() };
+}
+
+function renderFaturamento(){
+  const faixa = limitesDoPeriodo();
+
   const noPeriodo = (p) => {
-    if (!cfg.dias) return true;
-    const limite = new Date();
-    limite.setDate(limite.getDate() - cfg.dias + 1);
-    limite.setHours(0,0,0,0);
-    return new Date(p.criado_em) >= limite;
+    const d = new Date(p.criado_em);
+    return d >= faixa.inicio && d <= faixa.fim;
   };
 
   // Venda de verdade = pedido que VOCÊ confirmou. Pedido "pago_declarado" é
@@ -1794,6 +1952,98 @@ function renderFaturamento(){
 
   document.getElementById('mais-vendidos').innerHTML  = tabela(porModelo, 'Modelo');
   document.getElementById('mais-tamanhos').innerHTML = tabela(porTamanho, 'Numeração');
+
+  renderPlanejamento(vendas, faixa);
+}
+
+/* ===========================================================================
+   PLANEJAMENTO DA PRÓXIMA COMPRA
+   Junta, para cada modelo e numeração: quanto vendeu no período, quanto ainda
+   tem, por quantos dias esse estoque dura no ritmo atual, e quanto comprar
+   para cobrir os próximos X dias. É a conta que evita comprar demais do que
+   não sai e faltar justamente do que gira.
+=========================================================================== */
+function renderPlanejamento(vendas, faixa){
+  const box = document.getElementById('tabela-planejamento');
+  const diasAlvo = Math.max(1, Number(document.getElementById('dias-cobertura').value) || 30);
+
+  document.getElementById('explica-planejamento').textContent =
+    `Baseado nas vendas confirmadas de ${faixa.rotulo} (${faixa.dias} dia(s)).`;
+
+  // Quanto vendeu de cada modelo+numeração no período
+  const vendidos = {};
+  vendas.forEach(p => (Array.isArray(p.itens)?p.itens:[]).forEach(it => {
+    const chave = `${it.produto_id || it.cod}|${it.tamanho}`;
+    vendidos[chave] = (vendidos[chave] || 0) + (Number(it.qtd)||0);
+  }));
+
+  // Cruza com o estoque atual de cada produto ativo
+  const linhas = [];
+  produtos.filter(p => p.ativo).forEach(prod => {
+    (Array.isArray(prod.tamanhos) ? prod.tamanhos : []).forEach(t => {
+      const tam = String(t);
+      const emEstoque = Number((prod.estoque || {})[tam] ?? 0);
+      const vendeu = vendidos[`${prod.id}|${tam}`] || vendidos[`${prod.cod}|${tam}`] || 0;
+      const porDia = vendeu / faixa.dias;
+      // Quantos dias o estoque atual ainda cobre no ritmo do período
+      const cobertura = porDia > 0 ? emEstoque / porDia : null;
+      // Quanto falta para cobrir o alvo
+      const comprar = porDia > 0 ? Math.max(0, Math.ceil(porDia * diasAlvo - emEstoque)) : 0;
+      linhas.push({ nome: prod.nome, cod: prod.cod, tam, emEstoque, vendeu, cobertura, comprar });
+    });
+  });
+
+  if (linhas.length === 0){
+    box.innerHTML = '<p class="muted">Cadastre produtos para ver o planejamento.</p>';
+    return;
+  }
+
+  // Ordena por urgência: quem acaba primeiro aparece no topo
+  linhas.sort((a,b) => {
+    const ca = a.cobertura === null ? Infinity : a.cobertura;
+    const cb = b.cobertura === null ? Infinity : b.cobertura;
+    return ca - cb;
+  });
+
+  const totalComprar = linhas.reduce((s,l) => s + l.comprar, 0);
+
+  const selo = (l) => {
+    if (l.cobertura === null)
+      return l.emEstoque === 0
+        ? '<span class="badge badge-status">parado e zerado</span>'
+        : '<span class="badge badge-status">sem venda no período</span>';
+    if (l.cobertura < 7)  return '<span class="badge badge-esgotado">acaba em menos de 7 dias</span>';
+    if (l.cobertura < 15) return '<span class="badge badge-atencao">acaba em menos de 15 dias</span>';
+    return '<span class="badge badge-ok">estoque folgado</span>';
+  };
+
+  box.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Modelo</th><th>Numeração</th><th>Vendidos</th><th>Em estoque</th>
+        <th>Dura até</th><th>Situação</th><th>Comprar</th>
+      </tr></thead>
+      <tbody>
+        ${linhas.map(l => `
+          <tr>
+            <td>${esc(l.nome)}</td>
+            <td><b>${esc(l.tam)}</b></td>
+            <td>${l.vendeu}</td>
+            <td>${l.emEstoque}</td>
+            <td class="muted">${ l.cobertura === null ? '—'
+                 : (l.cobertura >= 365 ? 'mais de 1 ano' : `${Math.floor(l.cobertura)} dias`) }</td>
+            <td>${selo(l)}</td>
+            <td>${ l.comprar > 0
+                 ? `<b style="color:var(--accent);">${l.comprar} par(es)</b>`
+                 : '<span class="muted">—</span>' }</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:12px;">
+      <b>Total sugerido: ${totalComprar} par(es)</b> para manter ${diasAlvo} dias de estoque.
+      A sugestão é uma referência baseada no ritmo de vendas do período escolhido —
+      considere também sazonalidade e o pedido mínimo do seu fornecedor.
+    </p>`;
 }
 
 /* ===========================================================================
@@ -1854,6 +2104,19 @@ document.getElementById('busca-pedidos').addEventListener('input', (e) => {
   renderPedidos();
 });
 document.getElementById('btn-relatorio').addEventListener('click', abrirRelatorio);
+document.getElementById('btn-rel-estoque').addEventListener('click', abrirRelatorioEstoque);
+
+document.getElementById('btn-aplicar-datas').addEventListener('click', () => {
+  const i = document.getElementById('data-inicio').value;
+  const f = document.getElementById('data-fim').value;
+  if (!i || !f){ mostrar('erro-faturamento','Preencha as duas datas.',4000); return; }
+  if (i > f){ mostrar('erro-faturamento','A data inicial não pode ser depois da final.',4000); return; }
+  dataInicio = i; dataFim = f;
+  esconder('erro-faturamento');
+  renderFaturamento();
+});
+
+document.getElementById('dias-cobertura').addEventListener('change', renderFaturamento);
 document.getElementById('btn-imprimir-relatorio').addEventListener('click', () => window.print());
 
 /* ===========================================================================
