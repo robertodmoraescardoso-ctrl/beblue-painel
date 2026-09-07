@@ -375,6 +375,9 @@
       </div>
       <div class="msg msg-erro oculto" id="erro-faturamento"></div>
       <div class="msg msg-alerta oculto" id="alerta-faturamento"></div>
+      <div class="toolbar">
+        <button class="btn btn-outline btn-sm" id="btn-rel-vendas">Relatório de vendas</button>
+      </div>
       <div class="chips" id="chips-periodo"></div>
       <div id="faixa-datas" class="faixa-datas oculto">
         <label>De</label>
@@ -1446,6 +1449,119 @@ function pedidosFiltrados(){
    Mostra o que você tem hoje, quanto isso custou e quanto vale se vender tudo.
    É o retrato do dinheiro parado em mercadoria.
 =========================================================================== */
+/* ===========================================================================
+   RELATÓRIO DE VENDAS
+   O espelho do relatório de estoque: mostra o que JÁ SAIU no período,
+   modelo por modelo e numeração por numeração, com receita, custo e lucro.
+=========================================================================== */
+function abrirRelatorioVendas(){
+  const box = document.getElementById('conteudo-relatorio');
+  const faixa = limitesDoPeriodo();
+
+  const CONFIRMADOS = ['confirmado','enviado','entregue'];
+  const vendas = pedidos.filter(p => {
+    const d = new Date(p.criado_em);
+    return d >= faixa.inicio && d <= faixa.fim && CONFIRMADOS.includes(p.status);
+  });
+
+  // Agrupa por modelo e, dentro dele, por numeração
+  const porModelo = {};
+  let totalPares = 0, totalReceita = 0, totalCusto = 0, semCusto = 0;
+
+  vendas.forEach(p => (Array.isArray(p.itens) ? p.itens : []).forEach(it => {
+    const prod = produtos.find(x => x.id === it.produto_id)
+              || produtos.find(x => x.cod && x.cod === it.cod);
+    const nome = it.nome || (prod && prod.nome) || it.cod || '—';
+    const cod  = it.cod || (prod && prod.cod) || '';
+    const qtd  = Number(it.qtd) || 0;
+    const receita = (Number(it.preco_unit) || 0) * qtd;
+    const custoUn = prod ? custoTotal(prod) : 0;
+    if (!prod || custoUn <= 0) semCusto += qtd;
+
+    if (!porModelo[nome]) porModelo[nome] = { cod, pares:0, receita:0, custo:0, tamanhos:{} };
+    const m = porModelo[nome];
+    m.pares   += qtd;
+    m.receita += receita;
+    m.custo   += custoUn * qtd;
+
+    const tam = String(it.tamanho ?? '—');
+    if (!m.tamanhos[tam]) m.tamanhos[tam] = { pares:0, receita:0 };
+    m.tamanhos[tam].pares   += qtd;
+    m.tamanhos[tam].receita += receita;
+
+    totalPares   += qtd;
+    totalReceita += receita;
+    totalCusto   += custoUn * qtd;
+  }));
+
+  const modelos = Object.entries(porModelo)
+    .map(([nome, m]) => ({ nome, ...m }))
+    .sort((a,b) => b.pares - a.pares);
+
+  const lucro = totalReceita - totalCusto;
+
+  box.innerHTML = `
+    <div class="rel-cabecalho">
+      <h2>Relatório de vendas — Beblue</h2>
+      <p class="muted">Período: ${esc(faixa.rotulo)} (${faixa.dias} dia(s)) &middot;
+         Emitido em ${formatData(new Date().toISOString())}</p>
+      <p class="muted">Só entram pedidos confirmados. A taxa de entrega não está incluída.</p>
+    </div>
+
+    <div class="rel-resumo-totais">
+      <div>Pares vendidos<br><b>${totalPares}</b></div>
+      <div>Receita<br><b>${formatBRL(totalReceita)}</b></div>
+      <div>Custo dos pares<br><b>${formatBRL(totalCusto)}</b></div>
+      <div>Lucro<br><b>${formatBRL(lucro)}</b></div>
+      <div>Média por dia<br><b>${(totalPares / faixa.dias).toFixed(1)} pares</b></div>
+    </div>
+
+    ${ modelos.length === 0 ? '<p class="muted">Nenhuma venda confirmada no período.</p>' : `
+    <div class="rel-secao">
+      <h3>Vendas por modelo</h3>
+      <table class="rel-tabela">
+        <thead><tr>
+          <th>Cód.</th><th>Modelo</th><th>Pares</th><th>Receita</th><th>Custo</th><th>Lucro</th>
+        </tr></thead>
+        <tbody>${modelos.map(m => `
+          <tr>
+            <td>${esc(m.cod)}</td>
+            <td>${esc(m.nome)}</td>
+            <td><b>${m.pares}</b></td>
+            <td>${formatBRL(m.receita)}</td>
+            <td>${m.custo > 0 ? formatBRL(m.custo) : '—'}</td>
+            <td>${m.custo > 0 ? formatBRL(m.receita - m.custo) : '—'}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>
+
+    <div class="rel-secao">
+      <h3>Detalhe por numeração</h3>
+      <p class="muted" style="margin-bottom:10px;">Use para montar a grade da próxima compra.</p>
+      <table class="rel-tabela">
+        <thead><tr><th>Modelo</th><th>Numeração</th><th>Pares</th><th>Receita</th></tr></thead>
+        <tbody>${modelos.map(m =>
+          Object.entries(m.tamanhos)
+            .sort((a,b) => b[1].pares - a[1].pares)
+            .map(([tam,d]) => `
+              <tr>
+                <td>${esc(m.nome)}</td>
+                <td><b>${esc(tam)}</b></td>
+                <td>${d.pares}</td>
+                <td>${formatBRL(d.receita)}</td>
+              </tr>`).join('')
+        ).join('')}</tbody>
+      </table>
+    </div>` }
+
+    ${ semCusto > 0 ? `<p class="muted" style="margin-top:14px;">
+      <b>Atenção:</b> ${semCusto} par(es) vendido(s) não têm custo cadastrado,
+      então entraram como custo zero. O lucro acima está maior do que o real.</p>` : '' }
+  `;
+
+  abrirModal('modal-relatorio');
+}
+
 function abrirRelatorioEstoque(){
   const box = document.getElementById('conteudo-relatorio');
   const ativos = produtos.filter(p => p.ativo);
@@ -2105,6 +2221,7 @@ document.getElementById('busca-pedidos').addEventListener('input', (e) => {
 });
 document.getElementById('btn-relatorio').addEventListener('click', abrirRelatorio);
 document.getElementById('btn-rel-estoque').addEventListener('click', abrirRelatorioEstoque);
+document.getElementById('btn-rel-vendas').addEventListener('click', abrirRelatorioVendas);
 
 document.getElementById('btn-aplicar-datas').addEventListener('click', () => {
   const i = document.getElementById('data-inicio').value;
