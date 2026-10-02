@@ -82,6 +82,23 @@
   .status-erro{color:var(--danger);font-weight:600;}
   .status-ok{color:var(--sea-dark);font-weight:600;}
 
+  /* Indicadores com referência do setor: número sozinho não diz se está bom.
+     A borda colorida deixa o problema achável de relance. */
+  .ind{
+    background:var(--card);border:1px solid var(--line);
+    border-left-width:4px;border-radius:10px;padding:14px 16px;
+  }
+  .ind.bom{border-left-color:var(--sea);}
+  .ind.atencao{border-left-color:var(--sun);}
+  .ind.ruim{border-left-color:var(--danger);}
+  .ind .ind-rot{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-soft);}
+  .ind .ind-val{font-size:24px;font-weight:700;margin-top:4px;}
+  .ind.bom .ind-val{color:var(--sea-dark);}
+  .ind.atencao .ind-val{color:#8a6412;}
+  .ind.ruim .ind-val{color:var(--danger);}
+  .ind .ind-sub{font-size:11.5px;color:var(--ink-soft);margin-top:4px;line-height:1.4;}
+  .ind .ind-ref{font-size:11px;color:var(--ink-soft);opacity:.7;margin-top:6px;font-style:italic;}
+
   .bloco-custo{background:var(--bg);border:1px solid var(--line);
     border-radius:var(--radius-m);padding:14px;}
   .linha-custos{display:flex;gap:10px;}
@@ -422,6 +439,15 @@
             <div class="muted" id="stat-taxas-obs">já descontadas do faturamento</div>
           </div>
         </div>
+      </div>
+
+      <div id="bloco-saude" class="oculto" style="margin-bottom:22px;">
+        <h3 style="font-size:15px;margin-bottom:4px;">Saúde do negócio</h3>
+        <p class="muted" style="margin-bottom:12px;">
+          Comparado com a referência do varejo de moda. Giro usa o estoque de hoje
+          como base — serve para comparar produtos, não períodos.
+        </p>
+        <div class="grid-cards" id="indicadores-saude"></div>
       </div>
 
       <div class="card" style="margin-bottom:22px;">
@@ -1978,7 +2004,74 @@ function limitesDoPeriodo(){
   return { inicio:i, fim, dias:cfg.dias, rotulo:cfg.rotulo.toLowerCase() };
 }
 
+/* Indicadores de saúde do negócio. Vêm de uma função do banco para que o
+   painel e o Gestão Sandálias nunca mostrem contas diferentes. */
+async function carregarSaude(){
+  const faixa = limitesDoPeriodo();
+  const bloco = document.getElementById('bloco-saude');
+  const dia = (d) => new Date(d).toISOString().slice(0,10);
+
+  try {
+    const resp = await api('rpc/fn_indicadores_gestor', {
+      method: 'POST',
+      body: JSON.stringify({ p_inicio: dia(faixa.inicio), p_fim: dia(faixa.fim) })
+    });
+    const d = await resp.json();
+    if (!d) { bloco.classList.add('oculto'); return; }
+
+    const ind = (rot, val, sub, ref, estado) => `
+      <div class="ind ${estado}">
+        <div class="ind-rot">${rot}</div>
+        <div class="ind-val">${val}</div>
+        <div class="ind-sub">${sub}</div>
+        <div class="ind-ref">${ref}</div>
+      </div>`;
+
+    const parado = Number(d.estoque_parado_pct) || 0;
+    const giro   = Number(d.giro_anual) || 0;
+    const gmroi  = Number(d.gmroi) || 0;
+    const recompra = Number(d.recompra_pct) || 0;
+    const vezes = Number(d.gasto_cliente_1x) > 0
+      ? (Number(d.gasto_cliente_recorrente) / Number(d.gasto_cliente_1x)).toFixed(1)
+      : null;
+
+    document.getElementById('indicadores-saude').innerHTML =
+      ind('Dinheiro parado', parado + '%',
+          `${formatBRL(d.estoque_parado_valor)} em numeração que não vendeu`,
+          'ideal: abaixo de 5%',
+          parado <= 5 ? 'bom' : parado <= 15 ? 'atencao' : 'ruim') +
+      ind('Giro do estoque', giro.toFixed(2) + '×',
+          d.cobertura_dias ? `o estoque de hoje dura ${d.cobertura_dias} dias` : '—',
+          'saudável: 3× a 6× ao ano',
+          (giro >= 3 && giro <= 8) ? 'bom' : giro < 3 ? 'ruim' : 'atencao') +
+      ind('GMROI', gmroi.toFixed(2),
+          'margem que cada R$ 1 em estoque devolve por ano',
+          'mínimo aceitável: 2,0',
+          gmroi >= 2 ? 'bom' : gmroi >= 1 ? 'atencao' : 'ruim') +
+      ind('Clientes que voltam', recompra + '%',
+          vezes
+            ? `${d.clientes_recorrentes} de ${d.clientes_total} — quem volta gasta ${vezes}× mais`
+            : `${d.clientes_recorrentes} de ${d.clientes_total} clientes`,
+          'referência do setor: 25% a 30%',
+          recompra >= 25 ? 'bom' : recompra >= 15 ? 'atencao' : 'ruim') +
+      (Number(d.rupturas) > 0
+        ? ind('Numerações zeradas', d.rupturas,
+              'tamanhos que vinham vendendo e acabaram — é venda perdida todo dia',
+              'veja a aba Estoque para repor',
+              'ruim')
+        : '');
+
+    bloco.classList.remove('oculto');
+  } catch (e){
+    // Indicador é apoio: se a função ainda não existir no banco, o resto do
+    // faturamento continua aparecendo normalmente.
+    console.warn('Indicadores de saúde indisponíveis:', e.message);
+    bloco.classList.add('oculto');
+  }
+}
+
 function renderFaturamento(){
+  carregarSaude();
   const faixa = limitesDoPeriodo();
 
   const noPeriodo = (p) => {
