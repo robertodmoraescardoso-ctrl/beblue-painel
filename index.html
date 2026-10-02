@@ -356,7 +356,7 @@
           <thead>
             <tr>
               <th>Data</th><th>Cliente</th><th>Celular</th>
-              <th>Entrega</th><th>Total</th><th>Status</th><th></th>
+              <th>Entrega</th><th>Pago com</th><th>Total</th><th>Status</th><th></th>
             </tr>
           </thead>
           <tbody id="tbody-pedidos"></tbody>
@@ -371,7 +371,9 @@
         <h1>Faturamento</h1>
         <p>Só entram pedidos que você <b>confirmou</b> — pedido cancelado ou ainda
            aguardando confirmação não é venda. A taxa de entrega não conta como
-           receita: ela cobre o custo da entrega, não é lucro da sandália.</p>
+           receita: ela cobre o custo da entrega, não é lucro da sandália.
+           Nas vendas no cartão, a taxa da InfinitePay já sai daqui: o valor
+           mostrado é <b>o que cai na sua conta</b>.</p>
       </div>
       <div class="msg msg-erro oculto" id="erro-faturamento"></div>
       <div class="msg msg-alerta oculto" id="alerta-faturamento"></div>
@@ -413,6 +415,11 @@
             <div class="rotulo">Taxas de entrega recebidas</div>
             <div style="font-size:20px;font-weight:700;" id="stat-frete">R$ 0,00</div>
             <div class="muted">fora do faturamento acima</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="rotulo">Taxas de cartão (InfinitePay)</div>
+            <div style="font-size:20px;font-weight:700;color:var(--danger);" id="stat-taxas">R$ 0,00</div>
+            <div class="muted" id="stat-taxas-obs">já descontadas do faturamento</div>
           </div>
         </div>
       </div>
@@ -1498,19 +1505,26 @@ function abrirRelatorioVendas(){
     .map(([nome, m]) => ({ nome, ...m }))
     .sort((a,b) => b.pares - a.pares);
 
-  const lucro = totalReceita - totalCusto;
+  // Taxa retida pela InfinitePay nas vendas no cartão do período.
+  const totalTaxas   = vendas.reduce((s,p) => s + (Number(p.taxa_valor)||0), 0);
+  const receitaLiq   = totalReceita - totalTaxas;
+  const lucro        = receitaLiq - totalCusto;
 
   box.innerHTML = `
     <div class="rel-cabecalho">
       <h2>Relatório de vendas — Beblue</h2>
       <p class="muted">Período: ${esc(faixa.rotulo)} (${faixa.dias} dia(s)) &middot;
          Emitido em ${formatData(new Date().toISOString())}</p>
-      <p class="muted">Só entram pedidos confirmados. A taxa de entrega não está incluída.</p>
+      <p class="muted">Só entram pedidos confirmados. A taxa de entrega não está incluída.
+         A taxa da InfinitePay já está descontada da receita.</p>
     </div>
 
     <div class="rel-resumo-totais">
       <div>Pares vendidos<br><b>${totalPares}</b></div>
-      <div>Receita<br><b>${formatBRL(totalReceita)}</b></div>
+      <div>Receita<br><b>${formatBRL(receitaLiq)}</b>${
+        totalTaxas > 0
+          ? `<br><span class="muted" style="font-size:12px;">${formatBRL(totalReceita)} − ${formatBRL(totalTaxas)} de taxa</span>`
+          : ''}</div>
       <div>Custo dos pares<br><b>${formatBRL(totalCusto)}</b></div>
       <div>Lucro<br><b>${formatBRL(lucro)}</b></div>
       <div>Média por dia<br><b>${(totalPares / faixa.dias).toFixed(1)} pares</b></div>
@@ -1691,7 +1705,7 @@ function abrirRelatorio(){
       <h3>Pedidos (${lista.length})</h3>
       ${ lista.length === 0 ? '<p class="muted">Nenhum pedido com esse filtro.</p>' : `
       <table class="rel-tabela">
-        <thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Total</th><th>Status</th></tr></thead>
+        <thead><tr><th>Data</th><th>Cliente</th><th>Itens</th><th>Pago com</th><th>Total</th><th>Status</th></tr></thead>
         <tbody>${lista.map(p => {
           const itens = (Array.isArray(p.itens) ? p.itens : [])
             .map(it => `${it.nome || it.cod || '—'} (${it.tamanho}) x${it.qtd}`).join(', ');
@@ -1699,7 +1713,9 @@ function abrirRelatorio(){
             <td style="white-space:nowrap;">${formatData(p.criado_em)}</td>
             <td>${esc(p.cliente_nome || '')}</td>
             <td>${esc(itens)}</td>
-            <td style="white-space:nowrap;">${formatBRL(p.total)}</td>
+            <td style="white-space:nowrap;">${rotuloPagamento(p)}</td>
+            <td style="white-space:nowrap;">${formatBRL(p.total)}${
+              Number(p.taxa_valor) > 0 ? ` (líq. ${formatBRL(p.valor_liquido)})` : ''}</td>
             <td>${esc(STATUS_LABEL[p.status] || p.status || '')}</td>
           </tr>`;
         }).join('')}</tbody>
@@ -1708,6 +1724,15 @@ function abrirRelatorio(){
   `;
 
   abrirModal('modal-relatorio');
+}
+
+/* Como o cliente pagou. "Pix" sem sobrenome é o Pix direto na chave da loja,
+   que não tem taxa; os outros passaram pelo checkout da InfinitePay. */
+function rotuloPagamento(p){
+  const forma = p.forma_pagamento || 'pix';
+  if (forma === 'cartao') return `Cartão ${Number(p.parcelas) > 1 ? p.parcelas + 'x' : 'à vista'}`;
+  if (forma === 'pix_infinitepay') return 'Pix (InfinitePay)';
+  return 'Pix';
 }
 
 function renderPedidos(){
@@ -1732,7 +1757,11 @@ function renderPedidos(){
       <td>${esc(p.cliente_nome || '')}</td>
       <td style="white-space:nowrap;">${esc(p.cliente_celular || '')}</td>
       <td><span class="badge badge-status">${p.modo_entrega === 'retirada' ? 'Retirada' : 'Entrega'}</span></td>
-      <td style="white-space:nowrap;">${formatBRL(p.total)}</td>
+      <td><span class="badge badge-status">${rotuloPagamento(p)}</span></td>
+      <td style="white-space:nowrap;">${formatBRL(p.total)}${
+        Number(p.taxa_valor) > 0
+          ? `<br><span class="muted" style="font-size:12px;">líq. ${formatBRL(p.valor_liquido)}</span>`
+          : ''}</td>
       <td>
         <select class="input-mid" data-status-id="${p.id}">
           ${STATUS_PEDIDO.map(s =>
@@ -1866,7 +1895,17 @@ function verPedido(id){
           </tr>`).join('')}
       </tbody>
     </table>
-    <p style="font-weight:700;font-size:18px;margin-bottom:18px;">Total: ${formatBRL(p.total)}</p>
+    <p style="font-weight:700;font-size:18px;margin-bottom:6px;">Total: ${formatBRL(p.total)}</p>
+    <p class="muted" style="margin-bottom:18px;">
+      Pago com <b>${rotuloPagamento(p)}</b>${
+        Number(p.taxa_valor) > 0
+          ? ` — taxa de ${esc(p.taxa_pct)}% (${formatBRL(p.taxa_valor)}).
+              <b>Cai na conta: ${formatBRL(p.valor_liquido)}</b>`
+          : ' — sem taxa.'}${
+        p.ip_receipt_url
+          ? `<br><a href="${esc(p.ip_receipt_url)}" target="_blank" rel="noopener">Ver comprovante da InfinitePay</a>`
+          : ''}
+    </p>
 
     <h3 style="font-size:14px;margin-bottom:8px;">Cliente</h3>
     <p class="muted">${esc(p.cliente_nome || '')}<br>
@@ -1955,10 +1994,14 @@ function renderFaturamento(){
 
   // Receita só dos produtos: a taxa de entrega sai fora, porque ela paga o
   // deslocamento — não é ganho da sandália.
-  const soProdutos = (p) => (Number(p.total)||0) - (Number(p.taxa_entrega)||0);
+  // Receita da sandália: tira a taxa de entrega (que só paga o deslocamento)
+  // e a taxa da InfinitePay (que nunca chega na conta). O que sobra é real.
+  const soProdutos = (p) =>
+    (Number(p.total)||0) - (Number(p.taxa_entrega)||0) - (Number(p.taxa_valor)||0);
 
   const receita = vendas.reduce((s,p) => s + soProdutos(p), 0);
   const fretes  = vendas.reduce((s,p) => s + (Number(p.taxa_entrega)||0), 0);
+  const taxas   = vendas.reduce((s,p) => s + (Number(p.taxa_valor)||0), 0);
   const qtd     = vendas.length;
 
   // Pares vendidos: soma das QUANTIDADES dos itens, não a quantidade de
@@ -1981,6 +2024,10 @@ function renderFaturamento(){
   document.getElementById('stat-pares').textContent  = pares;
   document.getElementById('stat-ticket').textContent = formatBRL(qtd ? receita/qtd : 0);
   document.getElementById('stat-frete').textContent  = formatBRL(fretes);
+  document.getElementById('stat-taxas').textContent  = formatBRL(taxas);
+  document.getElementById('stat-taxas-obs').textContent = taxas > 0
+    ? 'já descontadas do faturamento'
+    : 'nenhuma venda no cartão no período';
   document.getElementById('stat-pendente').textContent = formatBRL(
     pendentes.reduce((s,p) => s + soProdutos(p), 0));
   document.getElementById('stat-pendente-obs').textContent =
