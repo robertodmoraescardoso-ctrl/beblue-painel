@@ -1859,10 +1859,16 @@ async function mudarStatus(id, status){
 
     // O estoque já é baixado pelo banco no momento da compra. Aqui só tratamos
     // as exceções: pedido que chegou sem baixa, e devolução ao cancelar.
-    if (status === 'confirmado' && !ped.estoque_baixado){
+    //
+    // Qualquer status que signifique "a peça saiu" precisa baixar o estoque.
+    // Antes só 'confirmado' fazia isso, e quem marcava o pedido direto como
+    // 'entregue' (pulando a confirmação) nunca dava baixa — foi assim que
+    // 31 pares sumiram da conta sem sair do sistema.
+    const SAIU_DA_LOJA = ['confirmado','enviado','entregue'];
+    if (SAIU_DA_LOJA.includes(status) && !ped.estoque_baixado){
       avisos = await ajustarEstoqueDoPedido(ped, -1);
       mudancas.estoque_baixado = true;
-      recado = 'Pedido confirmado e estoque baixado.';
+      recado = 'Estoque baixado para este pedido.';
     }
     else if (status === 'cancelado' && ped.estoque_baixado){
       avisos = await ajustarEstoqueDoPedido(ped, +1);
